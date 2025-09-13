@@ -9,6 +9,7 @@ import logger from '#config/logger.js';
 
 // Import and use routes
 import authRoutes from '#routes/auth.routes.js';
+import securityMiddleware from '#middlewares/security.middleware.js';
 
 const app = express();
 
@@ -23,6 +24,9 @@ app.use(
     stream: { write: message => logger.info(message.trim()) },
   })
 );
+
+app.use(securityMiddleware);
+
 app.use('/api/auth', authRoutes);
 
 app.get('/health', (req, res) => {
