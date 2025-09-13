@@ -1,0 +1,147 @@
+name: Tests
+
+on:
+  push:
+    branches: [ main, staging ]
+  pull_request:
+    branches: [ main, staging ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    strategy:
+      matrix:
+        node-version: [20.x]
+
+    env:
+      NODE_ENV: test
+      NODE_OPTIONS: --experimental-vm-modules
+      DATABASE_URL: postgres://test:test@localhost:5432/test_db
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: test_db
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js ${{ matrix.node-version }}
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ matrix.node-version }}
+        cache: 'npm'
+        cache-dependency-path: package-lock.json
+
+    - name: Install dependencies
+      run: npm ci
+
+    - name: Wait for PostgreSQL to be ready
+      run: |
+        for i in {1..30}; do
+          if pg_isready -h localhost -p 5432 -U test; then
+            echo "PostgreSQL is ready"
+            break
+          fi
+          echo "Waiting for PostgreSQL... ($i/30)"
+          sleep 2
+        done
+
+    - name: Run database migrations (if any)
+      run: |
+        # Skip migrations if no migration script exists
+        if npm run | grep -q "db:migrate"; then
+          echo "Running database migrations..."
+          npm run db:migrate
+        else
+          echo "No database migrations found, skipping..."
+        fi
+      continue-on-error: true
+
+    - name: Run tests
+      id: test
+      run: |
+        echo "Running tests..."
+        npm test
+      continue-on-error: true
+
+    - name: Run test coverage (if available)
+      id: coverage
+      run: |
+        echo "Running test coverage..."
+        if npm run | grep -q "test:coverage"; then
+          npm run test:coverage
+        else
+          echo "No coverage script found, skipping coverage report"
+        fi
+      continue-on-error: true
+
+    - name: Upload coverage reports
+      if: steps.coverage.outcome == 'success'
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-reports-${{ matrix.node-version }}
+        path: |
+          coverage/
+          *.coverage
+          coverage.xml
+          coverage.json
+        retention-days: 30
+        if-no-files-found: warn
+
+    - name: Generate test summary
+      run: |
+        echo "### :test_tube: Test Results" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        if [ "${{ steps.test.outcome }}" == "success" ]; then
+          echo ":white_check_mark: **Tests:** All tests passed" >> $GITHUB_STEP_SUMMARY
+        else
+          echo ":x: **Tests:** Some tests failed" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        if [ "${{ steps.coverage.outcome }}" == "success" ]; then
+          echo ":white_check_mark: **Coverage:** Coverage report generated" >> $GITHUB_STEP_SUMMARY
+        elif [ "${{ steps.coverage.outcome }}" == "skipped" ]; then
+          echo ":warning: **Coverage:** Coverage not configured" >> $GITHUB_STEP_SUMMARY
+        else
+          echo ":x: **Coverage:** Coverage report failed" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Environment:**" >> $GITHUB_STEP_SUMMARY
+        echo "- Node.js: ${{ matrix.node-version }}" >> $GITHUB_STEP_SUMMARY
+        echo "- Database: PostgreSQL 15" >> $GITHUB_STEP_SUMMARY
+        echo "- NODE_ENV: test" >> $GITHUB_STEP_SUMMARY
+
+    - name: Annotate test failures
+      if: steps.test.outcome == 'failure'
+      run: |
+        echo "::error title=Test Failures::Some tests failed. Please check the test output above for details."
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### :warning: Test Failures Detected" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "Some tests failed during execution. Please review the test output above and:" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "1. Fix the failing tests" >> $GITHUB_STEP_SUMMARY
+        echo "2. Run tests locally with: \`npm test\`" >> $GITHUB_STEP_SUMMARY
+        echo "3. Ensure all tests pass before pushing changes" >> $GITHUB_STEP_SUMMARY
+
+    - name: Fail workflow if tests failed
+      if: steps.test.outcome == 'failure'
+      run: |
+        echo "Tests failed. Please fix the failing tests before merging."
+        exit 1

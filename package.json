@@ -16,6 +16,8 @@
   "scripts": {
     "dev": "node --watch src/index.js",
     "start": "node src/index.js",
+    "test": "echo \"No tests specified yet\" && exit 0",
+    "test:coverage": "echo \"No test coverage configured yet\" && exit 0",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
